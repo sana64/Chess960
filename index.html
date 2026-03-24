@@ -1,0 +1,685 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Шахматы Фишера | Fischer Random Chess</title>
+    <style>
+        * {
+            user-select: none;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        body {
+            background: linear-gradient(145deg, #2a3b2c 0%, #1d2a1e 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-family: 'Segoe UI', 'Roboto', 'Merriweather', serif;
+            margin: 0;
+            padding: 20px;
+        }
+
+        .game-container {
+            background: #3b2a1f;
+            padding: 20px 20px 24px;
+            border-radius: 48px;
+            box-shadow: 0 25px 40px rgba(0, 0, 0, 0.5), inset 0 1px 2px rgba(255, 255, 255, 0.1);
+        }
+
+        .board-wrapper {
+            background: #deb887;
+            padding: 12px;
+            border-radius: 24px;
+            box-shadow: inset 0 0 0 2px #f5e6d3, 0 10px 20px rgba(0, 0, 0, 0.3);
+        }
+
+        canvas {
+            display: block;
+            margin: 0 auto;
+            border-radius: 12px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+            cursor: pointer;
+            background-color: #f0d9b5;
+        }
+
+        .info-panel {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 20px;
+            gap: 20px;
+            flex-wrap: wrap;
+            background: #2c2118;
+            padding: 12px 20px;
+            border-radius: 60px;
+            box-shadow: inset 0 1px 2px rgba(0,0,0,0.3), 0 5px 10px rgba(0,0,0,0.2);
+        }
+
+        .turn-indicator {
+            background: #e9d6b0;
+            padding: 8px 18px;
+            border-radius: 40px;
+            font-weight: bold;
+            font-size: 1.2rem;
+            color: #3b2a1f;
+            box-shadow: inset 0 1px 2px #fff9e8, 0 2px 5px rgba(0,0,0,0.2);
+            letter-spacing: 1px;
+        }
+
+        button {
+            background: #e3b87c;
+            border: none;
+            font-size: 1rem;
+            font-weight: bold;
+            padding: 8px 20px;
+            border-radius: 36px;
+            cursor: pointer;
+            font-family: inherit;
+            transition: 0.1s linear;
+            color: #2c2118;
+            box-shadow: 0 3px 0 #7a5a3a;
+            transform: translateY(-2px);
+        }
+
+        button:active {
+            transform: translateY(2px);
+            box-shadow: 0 1px 0 #7a5a3a;
+        }
+
+        .status {
+            background: #1e1915;
+            color: #f0ddb0;
+            padding: 8px 16px;
+            border-radius: 40px;
+            font-size: 0.9rem;
+            font-weight: 500;
+            font-family: monospace;
+            letter-spacing: 0.5px;
+        }
+
+        @media (max-width: 550px) {
+            .game-container { padding: 12px; }
+            .info-panel { gap: 10px; }
+            .turn-indicator { font-size: 0.9rem; padding: 4px 12px; }
+            button { padding: 6px 14px; font-size: 0.8rem; }
+            .status { font-size: 0.7rem; }
+        }
+    </style>
+</head>
+<body>
+<div>
+    <div class="game-container">
+        <div class="board-wrapper">
+            <canvas id="chessCanvas" width="560" height="560"></canvas>
+        </div>
+        <div class="info-panel">
+            <div class="turn-indicator" id="turnText">Белые ходят</div>
+            <button id="resetBtn">♻️ Новая партия</button>
+            <div class="status" id="statusMsg">Fischer Random 960</div>
+        </div>
+    </div>
+</div>
+
+<script>
+    (function(){
+        // ---------- ШАХМАТЫ ФИШЕРА (Fischer Random 960) ----------
+        // Классическая расстановка: стандартный порядок фигур для случайной генерации
+        // Правила: слоны разноцветные, ладьи по краям от короля (рокировка возможна)
+        
+        const canvas = document.getElementById('chessCanvas');
+        const ctx = canvas.getContext('2d');
+        const turnText = document.getElementById('turnText');
+        const statusDiv = document.getElementById('statusMsg');
+        
+        let board = Array(8).fill().map(() => Array(8).fill(null));
+        let currentPlayer = 'white'; // white first
+        let selectedSquare = null;    // {row, col}
+        let validMoves = [];           // список {row, col}
+        let gameOver = false;
+        let winner = null;             // 'white', 'black'
+        
+        // для рокировки храним позиции ладей и короля (изначальные)
+        let whiteKingPos = {row: 7, col: 4};
+        let blackKingPos = {row: 0, col: 4};
+        let whiteRookPositions = {kingSide: null, queenSide: null};   // объекты {row, col}
+        let blackRookPositions = {kingSide: null, queenSide: null};
+        
+        // история для отката (не обязательна, но для корректности рокировки при сбросе)
+        let initialPositionsGenerated = false;
+        
+        // фигуры: символы для отображения, цвет, тип
+        // используем стандартные буквы: KQRBNP
+        
+        function getPieceChar(piece) {
+            if (!piece) return '';
+            const map = {
+                'king':   'K',
+                'queen':  'Q',
+                'rook':   'R',
+                'bishop': 'B',
+                'knight': 'N',
+                'pawn':   'P'
+            };
+            let ch = map[piece.type];
+            if (piece.color === 'black') return ch.toLowerCase();
+            return ch;
+        }
+        
+        // Генерация случайной стартовой позиции Фишера (корректная)
+        function generateRandomFischerPosition() {
+            // 1. Случайно размещаем слонов: разные цвета
+            let squares = Array(8).fill(null);
+            // белые поля (0,2,4,6) и черные (1,3,5,7) для слонов
+            let whiteBishopSquares = [0,2,4,6];
+            let blackBishopSquares = [1,3,5,7];
+            let wBishopIdx = Math.floor(Math.random() * whiteBishopSquares.length);
+            let bBishopIdx = Math.floor(Math.random() * blackBishopSquares.length);
+            let bishop1Col = whiteBishopSquares[wBishopIdx];
+            let bishop2Col = blackBishopSquares[bBishopIdx];
+            squares[bishop1Col] = 'bishop';
+            squares[bishop2Col] = 'bishop';
+            
+            // 2. Размещаем ферзя на любую свободную клетку
+            let freeIndices = [];
+            for(let i=0; i<8; i++) if(!squares[i]) freeIndices.push(i);
+            let queenPos = freeIndices.splice(Math.floor(Math.random() * freeIndices.length),1)[0];
+            squares[queenPos] = 'queen';
+            
+            // 3. Размещаем коней
+            let knightPositions = [];
+            // осталось 5 клеток для 2 коней и 3 для ладей+король
+            // сначала поставим коней случайно на 2 из оставшихся 5
+            let remaining = [...freeIndices];
+            for(let k=0; k<2; k++) {
+                let randIdx = Math.floor(Math.random() * remaining.length);
+                let pos = remaining.splice(randIdx,1)[0];
+                squares[pos] = 'knight';
+                knightPositions.push(pos);
+            }
+            // оставшиеся 3 клетки: это будут ладьи и король (ладья, король, ладья) в таком порядке, чтобы король был между ладьями
+            let lastThree = remaining; // 3 элемента
+            // сортируем по возрастанию, чтобы вставить ладья-король-ладья
+            lastThree.sort((a,b)=>a-b);
+            // назначаем: левая ладья, король, правая ладья
+            squares[lastThree[0]] = 'rook';
+            squares[lastThree[1]] = 'king';
+            squares[lastThree[2]] = 'rook';
+            
+            // итоговый массив типов фигур для белых (верхняя линия для черных будет зеркально)
+            let pieceTypes = squares.map(sq => sq);
+            return pieceTypes;
+        }
+        
+        // инициализация доски случайной позицией Фишера
+        function initFischerBoard() {
+            // генерируем случайный порядок фигур для белых (ряд 7 - белые)
+            let whiteBackRankTypes = generateRandomFischerPosition();
+            // черные (ряд 0) зеркально: порядок такой же но перевернутый? В шахматах фишера черные зеркально отражают белых: то есть позиция черных симметрична (король напротив короля и тд)
+            // Правильно: черные фигуры стоят на 0 ряду в том же порядке колонок, что и белые на 7-м. (зеркально по вертикали)
+            let blackBackRankTypes = [...whiteBackRankTypes]; // одинаковый порядок слева направо
+            
+            // очистка доски
+            board = Array(8).fill().map(() => Array(8).fill(null));
+            
+            // расстановка пешек
+            for(let col=0; col<8; col++) {
+                board[6][col] = { type: 'pawn', color: 'white' };
+                board[1][col] = { type: 'pawn', color: 'black' };
+            }
+            
+            // расстановка фигур по сгенерированным типам
+            for(let col=0; col<8; col++) {
+                let typeWhite = whiteBackRankTypes[col];
+                board[7][col] = { type: typeWhite, color: 'white' };
+                let typeBlack = blackBackRankTypes[col];
+                board[0][col] = { type: typeBlack, color: 'black' };
+            }
+            
+            // фиксируем позиции королей и ладей для рокировки
+            // белые
+            for(let col=0; col<8; col++) {
+                if(board[7][col] && board[7][col].type === 'king') whiteKingPos = {row:7, col:col};
+            }
+            for(let col=0; col<8; col++) {
+                if(board[7][col] && board[7][col].type === 'rook') {
+                    let rookCol = col;
+                    if(rookCol < whiteKingPos.col) whiteRookPositions.queenSide = {row:7, col:rookCol};
+                    else if(rookCol > whiteKingPos.col) whiteRookPositions.kingSide = {row:7, col:rookCol};
+                }
+            }
+            // черные
+            for(let col=0; col<8; col++) {
+                if(board[0][col] && board[0][col].type === 'king') blackKingPos = {row:0, col:col};
+            }
+            for(let col=0; col<8; col++) {
+                if(board[0][col] && board[0][col].type === 'rook') {
+                    let rookCol = col;
+                    if(rookCol < blackKingPos.col) blackRookPositions.queenSide = {row:0, col:rookCol};
+                    else if(rookCol > blackKingPos.col) blackRookPositions.kingSide = {row:0, col:rookCol};
+                }
+            }
+            
+            currentPlayer = 'white';
+            selectedSquare = null;
+            validMoves = [];
+            gameOver = false;
+            winner = null;
+            updateStatusMessage();
+        }
+        
+        // --- Вспомогательные функции шахматной логики (без учета рокировки, добавим позже) ---
+        function isInside(row,col) { return row>=0 && row<8 && col>=0 && col<8; }
+        
+        // проверка, что клетка атакуется игроком (color: attacking side)
+        function isSquareAttacked(row, col, attackerColor) {
+            for(let r=0; r<8; r++) {
+                for(let c=0; c<8; c++) {
+                    const piece = board[r][c];
+                    if(piece && piece.color === attackerColor) {
+                        let moves = getPieceMovesWithoutSelfCheck(r,c, false);
+                        for(let mv of moves) {
+                            if(mv.row === row && mv.col === col) return true;
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+        
+        // Получение ходов фигуры без проверки на шах королю (pure)
+        function getPieceMovesWithoutSelfCheck(row, col, checkForSelfCheck = false, kingPosRef = null) {
+            const piece = board[row][col];
+            if(!piece) return [];
+            let moves = [];
+            const color = piece.color;
+            
+            switch(piece.type) {
+                case 'pawn':
+                    let dir = (color === 'white') ? -1 : 1;
+                    let startRow = (color === 'white') ? 6 : 1;
+                    // вперед на 1
+                    let newRow = row + dir;
+                    if(isInside(newRow, col) && !board[newRow][col]) {
+                        moves.push({row: newRow, col});
+                        // начальный ход на 2
+                        if(row === startRow && !board[row+dir][col] && !board[row+2*dir][col]) {
+                            moves.push({row: row+2*dir, col});
+                        }
+                    }
+                    // взятие по диагонали
+                    for(let dc of [-1,1]) {
+                        let newCol = col+dc;
+                        if(isInside(newRow, newCol) && board[newRow][newCol] && board[newRow][newCol].color !== color) {
+                            moves.push({row: newRow, col: newCol});
+                        }
+                    }
+                    break;
+                case 'knight':
+                    const knightOffsets = [[-2,-1],[-2,1],[-1,-2],[-1,2],[1,-2],[1,2],[2,-1],[2,1]];
+                    for(let [dr,dc] of knightOffsets) {
+                        let nr = row+dr, nc = col+dc;
+                        if(isInside(nr,nc) && (!board[nr][nc] || board[nr][nc].color !== color)) {
+                            moves.push({row:nr, col:nc});
+                        }
+                    }
+                    break;
+                case 'bishop':
+                    for(let dr of [-1,1]) {
+                        for(let dc of [-1,1]) {
+                            for(let i=1; i<=7; i++) {
+                                let nr = row+dr*i, nc = col+dc*i;
+                                if(!isInside(nr,nc)) break;
+                                if(!board[nr][nc]) { moves.push({row:nr, col:nc}); }
+                                else {
+                                    if(board[nr][nc].color !== color) moves.push({row:nr, col:nc});
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    break;
+                case 'rook':
+                    for(let dr of [-1,1]) {
+                        for(let i=1; i<=7; i++) {
+                            let nr = row+dr*i;
+                            if(!isInside(nr,col)) break;
+                            if(!board[nr][col]) moves.push({row:nr, col});
+                            else {
+                                if(board[nr][col].color !== color) moves.push({row:nr, col});
+                                break;
+                            }
+                        }
+                    }
+                    for(let dc of [-1,1]) {
+                        for(let i=1; i<=7; i++) {
+                            let nc = col+dc*i;
+                            if(!isInside(row,nc)) break;
+                            if(!board[row][nc]) moves.push({row, col:nc});
+                            else {
+                                if(board[row][nc].color !== color) moves.push({row, col:nc});
+                                break;
+                            }
+                        }
+                    }
+                    break;
+                case 'queen':
+                    // объединяем ладью и слона
+                    const queenDirs = [[-1,0],[1,0],[0,-1],[0,1],[-1,-1],[-1,1],[1,-1],[1,1]];
+                    for(let [dr,dc] of queenDirs) {
+                        for(let i=1; i<=7; i++) {
+                            let nr = row+dr*i, nc = col+dc*i;
+                            if(!isInside(nr,nc)) break;
+                            if(!board[nr][nc]) moves.push({row:nr, col:nc});
+                            else {
+                                if(board[nr][nc].color !== color) moves.push({row:nr, col:nc});
+                                break;
+                            }
+                        }
+                    }
+                    break;
+                case 'king':
+                    for(let dr of [-1,0,1]) {
+                        for(let dc of [-1,0,1]) {
+                            if(dr===0 && dc===0) continue;
+                            let nr = row+dr, nc = col+dc;
+                            if(isInside(nr,nc) && (!board[nr][nc] || board[nr][nc].color !== color)) {
+                                moves.push({row:nr, col:nc});
+                            }
+                        }
+                    }
+                    // рокировка будет добавлена отдельно (специальная функция)
+                    break;
+            }
+            
+            // если проверяем на шах своему королю - фильтруем
+            if(checkForSelfCheck) {
+                let currentKingPos = (color === 'white') ? whiteKingPos : blackKingPos;
+                if(piece.type === 'king') currentKingPos = {row, col};
+                moves = moves.filter(mv => {
+                    const capturedPiece = board[mv.row][mv.col];
+                    // симуляция хода
+                    board[mv.row][mv.col] = piece;
+                    board[row][col] = null;
+                    let originalKingPos = (color === 'white') ? whiteKingPos : blackKingPos;
+                    let newKingPos = (piece.type === 'king') ? {row: mv.row, col: mv.col} : originalKingPos;
+                    let underCheck = isSquareAttacked(newKingPos.row, newKingPos.col, color === 'white' ? 'black' : 'white');
+                    // откат
+                    board[row][col] = piece;
+                    board[mv.row][mv.col] = capturedPiece;
+                    return !underCheck;
+                });
+            }
+            return moves;
+        }
+        
+        // Добавляем рокировку
+        function getCastlingMoves(row, col, piece) {
+            if(piece.type !== 'king') return [];
+            let moves = [];
+            let color = piece.color;
+            let kingPos = {row, col};
+            let opponent = (color === 'white') ? 'black' : 'white';
+            // проверка что король не под шахом
+            if(isSquareAttacked(kingPos.row, kingPos.col, opponent)) return [];
+            let rooks = (color === 'white') ? whiteRookPositions : blackRookPositions;
+            let backRank = (color === 'white') ? 7 : 0;
+            
+            // Короткая рокировка (kingSide)
+            if(rooks.kingSide) {
+                let rookCol = rooks.kingSide.col;
+                let step = (rookCol > col) ? 1 : -1;
+                if(step === 1) { // кор. сторона справа
+                    let empty = true;
+                    for(let c = col+1; c < rookCol; c++) {
+                        if(board[backRank][c] !== null) empty = false;
+                    }
+                    let pathSafe = true;
+                    for(let c = col; c <= col+2; c++) {
+                        if(isSquareAttacked(backRank, c, opponent)) pathSafe = false;
+                    }
+                    if(empty && pathSafe && board[backRank][rookCol] && board[backRank][rookCol].type === 'rook' && board[backRank][rookCol].color === color) {
+                        moves.push({row: backRank, col: col+2, isCastling: true, rookFrom: rookCol, rookTo: col+1});
+                    }
+                }
+            }
+            // Длинная рокировка (queenSide)
+            if(rooks.queenSide) {
+                let rookCol = rooks.queenSide.col;
+                if(rookCol < col) {
+                    let empty = true;
+                    for(let c = rookCol+1; c < col; c++) {
+                        if(board[backRank][c] !== null) empty = false;
+                    }
+                    let pathSafe = true;
+                    for(let c = col-2; c <= col; c++) {
+                        if(isSquareAttacked(backRank, c, opponent)) pathSafe = false;
+                    }
+                    if(empty && pathSafe && board[backRank][rookCol] && board[backRank][rookCol].type === 'rook' && board[backRank][rookCol].color === color) {
+                        moves.push({row: backRank, col: col-2, isCastling: true, rookFrom: rookCol, rookTo: col-1});
+                    }
+                }
+            }
+            return moves;
+        }
+        
+        function getAllValidMovesForSide(sideColor) {
+            let movesList = [];
+            for(let i=0;i<8;i++){
+                for(let j=0;j<8;j++){
+                    const p = board[i][j];
+                    if(p && p.color === sideColor) {
+                        let moves = getPieceMovesWithoutSelfCheck(i,j, true);
+                        if(p.type === 'king') {
+                            let castling = getCastlingMoves(i,j,p);
+                            moves.push(...castling);
+                        }
+                        for(let mv of moves) movesList.push({from:{row:i,col:j}, to:{row:mv.row,col:mv.col}, castlingData: mv.isCastling ? mv : null});
+                    }
+                }
+            }
+            return movesList;
+        }
+        
+        function isCheckmateOrStalemate() {
+            let moves = getAllValidMovesForSide(currentPlayer);
+            if(moves.length > 0) return false;
+            let kingPos = (currentPlayer === 'white') ? whiteKingPos : blackKingPos;
+            let inCheck = isSquareAttacked(kingPos.row, kingPos.col, currentPlayer === 'white' ? 'black' : 'white');
+            if(inCheck) {
+                gameOver = true;
+                winner = (currentPlayer === 'white') ? 'black' : 'white';
+                updateStatusMessage();
+                return true;
+            } else {
+                gameOver = true;
+                winner = null; // пат
+                updateStatusMessage();
+                return true;
+            }
+        }
+        
+        function makeMove(fromRow, fromCol, toRow, toCol, castlingData) {
+            const piece = board[fromRow][fromCol];
+            if(!piece || piece.color !== currentPlayer) return false;
+            // Валидация хода
+            let legalMoves = [];
+            let normalMoves = getPieceMovesWithoutSelfCheck(fromRow, fromCol, true);
+            if(piece.type === 'king') {
+                let castMoves = getCastlingMoves(fromRow, fromCol, piece);
+                legalMoves = [...normalMoves, ...castMoves];
+            } else {
+                legalMoves = normalMoves;
+            }
+            let isValid = false;
+            let targetCastle = null;
+            for(let mv of legalMoves) {
+                if(mv.row === toRow && mv.col === toCol) {
+                    isValid = true;
+                    if(mv.isCastling) targetCastle = mv;
+                    break;
+                }
+            }
+            if(!isValid) return false;
+            
+            // сохраняем старое
+            let captured = board[toRow][toCol];
+            // выполнение хода
+            board[toRow][toCol] = piece;
+            board[fromRow][fromCol] = null;
+            let oldKingPos = (currentPlayer === 'white') ? whiteKingPos : blackKingPos;
+            if(piece.type === 'king') {
+                if(currentPlayer === 'white') whiteKingPos = {row:toRow, col:toCol};
+                else blackKingPos = {row:toRow, col:toCol};
+                // обновляем позиции ладей для рокировки после хода короля (рокировка более недоступна)
+                if(currentPlayer === 'white') { whiteRookPositions.kingSide = null; whiteRookPositions.queenSide = null; }
+                else { blackRookPositions.kingSide = null; blackRookPositions.queenSide = null; }
+            }
+            // рокировка: перемещаем ладью
+            if(targetCastle && targetCastle.isCastling) {
+                let rook = board[targetCastle.rookFrom][targetCastle.rookTo]; // на самом деле надо взять ладью с исходной позиции
+                let rookPiece = board[targetCastle.rookFrom][targetCastle.rookFrom];
+                if(rookPiece && rookPiece.type === 'rook') {
+                    board[targetCastle.rookFrom][targetCastle.rookFrom] = null;
+                    board[targetCastle.rookTo][targetCastle.rookTo] = rookPiece;
+                }
+            }
+            
+            // если ладья сдвинулась - обнуляем рокировочные возможности
+            if(piece.type === 'rook') {
+                if(currentPlayer === 'white') {
+                    if(whiteRookPositions.kingSide && whiteRookPositions.kingSide.row === fromRow && whiteRookPositions.kingSide.col === fromCol) whiteRookPositions.kingSide = null;
+                    if(whiteRookPositions.queenSide && whiteRookPositions.queenSide.row === fromRow && whiteRookPositions.queenSide.col === fromCol) whiteRookPositions.queenSide = null;
+                } else {
+                    if(blackRookPositions.kingSide && blackRookPositions.kingSide.row === fromRow && blackRookPositions.kingSide.col === fromCol) blackRookPositions.kingSide = null;
+                    if(blackRookPositions.queenSide && blackRookPositions.queenSide.row === fromRow && blackRookPositions.queenSide.col === fromCol) blackRookPositions.queenSide = null;
+                }
+            }
+            
+            // смена игрока
+            currentPlayer = (currentPlayer === 'white') ? 'black' : 'white';
+            // проверка на шах/мат
+            if(isCheckmateOrStalemate()) {
+                drawBoard();
+                return true;
+            }
+            drawBoard();
+            return true;
+        }
+        
+        function updateStatusMessage() {
+            if(gameOver) {
+                if(winner === 'white') statusDiv.innerText = '🏆 Победа белых! 🏆';
+                else if(winner === 'black') statusDiv.innerText = '🏆 Победа черных! 🏆';
+                else statusDiv.innerText = '🤝 Пат! Ничья 🤝';
+                turnText.innerText = gameOver ? 'Игра окончена' : (currentPlayer === 'white' ? 'Белые ходят' : 'Черные ходят');
+            } else {
+                turnText.innerText = currentPlayer === 'white' ? '♔ Белые ходят' : '♚ Черные ходят';
+                let kingPos = (currentPlayer === 'white') ? whiteKingPos : blackKingPos;
+                let inCheck = isSquareAttacked(kingPos.row, kingPos.col, currentPlayer === 'white' ? 'black' : 'white');
+                statusDiv.innerText = inCheck ? '⚠️ ШАХ! ⚠️' : 'Fischer Random 960';
+            }
+        }
+        
+        // отрисовка доски
+        function drawBoard() {
+            const size = 560;
+            const cellSize = size/8;
+            for(let i=0;i<8;i++){
+                for(let j=0;j<8;j++){
+                    let isDark = (i+j)%2===1;
+                    ctx.fillStyle = isDark ? '#b58863' : '#f0d9b5';
+                    ctx.fillRect(j*cellSize, i*cellSize, cellSize, cellSize);
+                    if(selectedSquare && selectedSquare.row===i && selectedSquare.col===j){
+                        ctx.fillStyle = 'rgba(80, 200, 80, 0.5)';
+                        ctx.fillRect(j*cellSize, i*cellSize, cellSize, cellSize);
+                    }
+                }
+            }
+            for(let mv of validMoves){
+                ctx.fillStyle = 'rgba(0, 150, 60, 0.4)';
+                ctx.beginPath();
+                ctx.arc(mv.col*cellSize+cellSize/2, mv.row*cellSize+cellSize/2, cellSize*0.25, 0, 2*Math.PI);
+                ctx.fill();
+            }
+            for(let i=0;i<8;i++){
+                for(let j=0;j<8;j++){
+                    const piece = board[i][j];
+                    if(piece){
+                        let symbol = getPieceChar(piece);
+                        let color = piece.color === 'white' ? '#fff3e0' : '#2c2c2c';
+                        ctx.font = `bold ${cellSize * 0.65}px 'Segoe UI', 'Noto Sans'`;
+                        ctx.shadowBlur = 0;
+                        ctx.fillStyle = color;
+                        ctx.shadowColor = 'rgba(0,0,0,0.3)';
+                        ctx.fillText(symbol, j*cellSize+cellSize*0.28, i*cellSize+cellSize*0.78);
+                        ctx.shadowBlur = 0;
+                    }
+                }
+            }
+        }
+        
+        function resetGame() {
+            initFischerBoard();
+            selectedSquare = null;
+            validMoves = [];
+            gameOver = false;
+            winner = null;
+            drawBoard();
+            updateStatusMessage();
+        }
+        
+        function handleCanvasClick(e) {
+            if(gameOver) return;
+            const rect = canvas.getBoundingClientRect();
+            const scale = canvas.width / rect.width;
+            const mouseX = (e.clientX - rect.left) * scale;
+            const mouseY = (e.clientY - rect.top) * scale;
+            const cellSize = 560/8;
+            const col = Math.floor(mouseX / cellSize);
+            const row = Math.floor(mouseY / cellSize);
+            if(row<0 || row>=8 || col<0 || col>=8) return;
+            
+            if(selectedSquare === null) {
+                const piece = board[row][col];
+                if(piece && piece.color === currentPlayer) {
+                    selectedSquare = {row, col};
+                    let moves = getPieceMovesWithoutSelfCheck(row, col, true);
+                    if(piece.type === 'king') {
+                        let castling = getCastlingMoves(row, col, piece);
+                        moves.push(...castling);
+                    }
+                    validMoves = moves;
+                    drawBoard();
+                }
+            } else {
+                let from = selectedSquare;
+                let success = false;
+                for(let mv of validMoves) {
+                    if(mv.row === row && mv.col === col) {
+                        success = makeMove(from.row, from.col, row, col, mv.isCastling ? mv : null);
+                        break;
+                    }
+                }
+                selectedSquare = null;
+                validMoves = [];
+                if(success) {
+                    drawBoard();
+                    updateStatusMessage();
+                } else {
+                    drawBoard();
+                }
+            }
+        }
+        
+        canvas.addEventListener('click', handleCanvasClick);
+        document.getElementById('resetBtn').addEventListener('click', () => { resetGame(); drawBoard(); });
+        
+        initFischerBoard();
+        drawBoard();
+        updateStatusMessage();
+    })();
+</script>
+</body>
+</html>
